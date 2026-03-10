@@ -1,47 +1,76 @@
 #include "main.h"
 #include "lemlib/api.hpp" // IWYU pragma: keep
 
-
-
 // lemlib config
 pros::MotorGroup left_motors({1, -2, 3}, pros::MotorGearset::green);
 pros::MotorGroup right_motors({-4, 5, -6}, pros::MotorGearset::green);
-// drivetrain settings
+// drivetrain settings with 3.25 inch wheels
 lemlib::Drivetrain drivetrain(&left_motors, // left motor group
                               &right_motors, // right motor group
-                              9,
-                              lemlib::Omniwheel::NEW_325,
+                              9, // track width in inches
+                              lemlib::Omniwheel::NEW_325, // 3.25 inch wheels
                               333.33, // drivetrain rpm is 360
                               2 // horizontal drift is 2 (for now)
 );
 
+// IMU sensor for heading tracking
 pros::Imu imu(10);
 
+// Distance sensors for obstacle detection and positioning
+// Adjust port numbers as needed for your robot configuration
+pros::Distance distance_front(11); // Front-facing distance sensor
+pros::Distance distance_back(12);  // Back-facing distance sensor (optional)
 
-lemlib::OdomSensors sensors(nullptr, // vertical tracking wheel 1, set to null
-                            nullptr, // vertical tracking wheel 2, set to nullptr as we are using IMEs
-                            nullptr, // horizontal tracking wheel 1
-                            nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
-                            &imu // inertial sensor
+// Odometry wheels (2 vertical tracking wheels)
+// Using rotation sensors - adjust port numbers as needed
+// Use negative port number for reversed rotation sensor
+pros::Rotation vertical_encoder_left(13);   // Left vertical tracking wheel
+pros::Rotation vertical_encoder_right(-14); // Right vertical tracking wheel (reversed)
+
+// Create tracking wheels with 2.75" omni wheels (common for odometry)
+// Distance is from the tracking center - adjust based on your robot
+lemlib::TrackingWheel vertical_tracking_wheel_left(&vertical_encoder_left,
+                                                    lemlib::Omniwheel::NEW_275,
+                                                    -4.5); // 4.5 inches left of center
+lemlib::TrackingWheel vertical_tracking_wheel_right(&vertical_encoder_right,
+                                                     lemlib::Omniwheel::NEW_275,
+                                                     4.5); // 4.5 inches right of center
+
+// Odometry sensors configuration
+lemlib::OdomSensors sensors(&vertical_tracking_wheel_left,  // vertical tracking wheel 1 (left)
+                            &vertical_tracking_wheel_right, // vertical tracking wheel 2 (right)
+                            nullptr, // horizontal tracking wheel 1 (not used)
+                            nullptr, // horizontal tracking wheel 2 (not used)
+                            &imu     // inertial sensor
 );
 
+// PID controllers for chassis movement
+// Lateral (forward/backward) controller settings
+lemlib::ControllerSettings lateral_controller(10,  // proportional gain (kP)
+                                               0,   // integral gain (kI)
+                                               3,   // derivative gain (kD)
+                                               3,   // anti windup
+                                               1,   // small error range (inches)
+                                               100, // small error timeout (ms)
+                                               3,   // large error range (inches)
+                                               500, // large error timeout (ms)
+                                               20   // max acceleration (slew)
+);
 
+// Angular (turning) controller settings
+lemlib::ControllerSettings angular_controller(2,   // proportional gain (kP)
+                                               0,   // integral gain (kI)
+                                               10,  // derivative gain (kD)
+                                               3,   // anti windup
+                                               1,   // small error range (degrees)
+                                               100, // small error timeout (ms)
+                                               3,   // large error range (degrees)
+                                               500, // large error timeout (ms)
+                                               0    // max acceleration (slew)
+);
 
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
-	} else {
-		pros::lcd::clear_line(2);
-	}
-}
+// Chassis object - combines drivetrain, sensors, and PID controllers
+lemlib::Chassis chassis(drivetrain, lateral_controller, angular_controller, sensors);
 
 
 
@@ -52,10 +81,22 @@ void on_center_button() {
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
-	pros::lcd::initialize();
-	pros::lcd::set_text(1, "Hello PROS User!");
+	pros::screen::erase();
+	pros::screen::print(TEXT_MEDIUM, 1, "Hello PROS User!");
 
-	pros::lcd::register_btn1_cb(on_center_button);
+	// Calibrate the chassis (IMU and tracking wheels)
+	chassis.calibrate();
+
+	// Wait for IMU calibration to complete
+	while (imu.is_calibrating()) {
+		pros::delay(10);
+	}
+
+	// Additional settling time for tracking wheels
+	pros::delay(500);
+
+	// Set initial pose (x, y, theta) - adjust based on your starting position
+	chassis.setPose(0, 0, 0);
 }
 
 /**
@@ -104,20 +145,34 @@ void autonomous() {}
  */
 void opcontrol() {
 	pros::Controller master(pros::E_CONTROLLER_MASTER);
-	pros::MotorGroup left_mg({1, -2, 3});    // Creates a motor group with forwards ports 1 & 3 and reversed port 2
-	pros::MotorGroup right_mg({-4, 5, -6});  // Creates a motor group with forwards port 5 and reversed ports 4 & 6
-
 
 	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
-		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
-		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
+		// Get distance sensor readings (in mm, convert to inches for display)
+		double front_distance_mm = distance_front.get_distance();
+		double back_distance_mm = distance_back.get_distance();
+		double front_distance_in = front_distance_mm / 25.4;
+		double back_distance_in = back_distance_mm / 25.4;
 
-		// Arcade control scheme
+		// Display distance readings on brain screen
+		pros::screen::print(TEXT_MEDIUM, 2, "Front: %.1f in", front_distance_in);
+		pros::screen::print(TEXT_MEDIUM, 3, "Back: %.1f in", back_distance_in);
+
+		// Get current pose from odometry
+		lemlib::Pose pose = chassis.getPose();
+		pros::screen::print(TEXT_MEDIUM, 4, "X: %.1f Y: %.1f", pose.x, pose.y);
+		pros::screen::print(TEXT_MEDIUM, 5, "Heading: %.1f", pose.theta);
+
+		// Arcade control scheme using chassis
 		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
 		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		left_mg.move(dir - turn);                      // Sets left motor voltage
-		right_mg.move(dir + turn);                     // Sets right motor voltage
-		pros::delay(20);                               // Run for 20 ms then update
+		chassis.arcade(dir, turn);
+
+		// Optional: Use distance sensor for collision avoidance
+		// If object detected within 12 inches in front, stop or slow down
+		if (front_distance_mm > 0 && front_distance_mm < 304.8) { // 12 inches = 304.8 mm
+			master.rumble("-"); // Rumble controller to warn driver
+		}
+
+		pros::delay(20); // Run for 20 ms then update
 	}
 }
