@@ -1,45 +1,107 @@
 #include "main.h"
 #include "lemlib/api.hpp" // IWYU pragma: keep
+#include <cmath>
 
 // lemlib config
 pros::MotorGroup left_motors({1, -2, 3}, pros::MotorGearset::green);
 pros::MotorGroup right_motors({-4, 5, -6}, pros::MotorGearset::green);
-// drivetrain settings with 3.25 inch wheels
+
+// Drivetrain settings
+// TODO: tune these for your exact robot
 lemlib::Drivetrain drivetrain(&left_motors, // left motor group
-                              &right_motors, // right motor group
-                              9, // track width in inches
-                              lemlib::Omniwheel::NEW_325, // 3.25 inch wheels
-                              333.33, // drivetrain rpm is 360
-                              2 // horizontal drift is 2 (for now)
+                               &right_motors, // right motor group
+                               11.5, // track width in inches
+                               lemlib::Omniwheel::NEW_4, // drivetrain wheel diameter
+                               600, // drivetrain rpm
+                               2 // horizontal drift
 );
 
-// IMU sensor for heading tracking
+// IMU + odometry sensors (as requested)
+// TODO: update these ports / reverse flags to match your robot build
 pros::Imu imu(10);
+pros::Rotation vertical_encoder(11);   // vertical odom wheel
+pros::Rotation horizontal_encoder(12); // horizontal odom wheel
 
-// Distance sensors for obstacle detection and positioning
-// Adjust port numbers as needed for your robot configuration
-pros::Distance distance_front(11); // Front-facing distance sensor
-pros::Distance distance_back(12);  // Back-facing distance sensor (optional)
+// Distance sensors for wall-based localization correction
+// Left sensor points WEST wall, right sensor points EAST wall
+pros::Distance left_distance(13);
+pros::Distance right_distance(14);
 
-// Odometry wheels (2 vertical tracking wheels)
-// Using rotation sensors - adjust port numbers as needed
-// Use negative port number for reversed rotation sensor
-pros::Rotation vertical_encoder_left(13);   // Left vertical tracking wheel
-pros::Rotation vertical_encoder_right(-14); // Right vertical tracking wheel (reversed)
+// Field / robot geometry for distance-sensor localization (inches)
+constexpr double FIELD_WIDTH_IN = 144.0;         // 12 ft field
+constexpr double LEFT_SENSOR_OFFSET_IN = 5.5;    // center -> left sensor
+constexpr double RIGHT_SENSOR_OFFSET_IN = 5.5;   // center -> right sensor
+constexpr double DIST_MIN_IN = 2.0;
+constexpr double DIST_MAX_IN = 120.0;
+constexpr double HEADING_GATE_DEG = 25.0;        // only trust when mostly E/W aligned
 
-// Create tracking wheels with 2.75" omni wheels (common for odometry)
-// Distance is from the tracking center - adjust based on your robot
-lemlib::TrackingWheel vertical_tracking_wheel_left(&vertical_encoder_left,
-                                                    lemlib::Omniwheel::NEW_275,
-                                                    -4.5); // 4.5 inches left of center
-lemlib::TrackingWheel vertical_tracking_wheel_right(&vertical_encoder_right,
-                                                     lemlib::Omniwheel::NEW_275,
-                                                     4.5); // 4.5 inches right of center
+static double normalizeHeadingDeg(double heading) {
+	while (heading > 180.0) heading -= 360.0;
+	while (heading < -180.0) heading += 360.0;
+	return heading;
+}
+
+static bool headingAllowsWallCorrection(double headingDeg) {
+	const double h = std::abs(normalizeHeadingDeg(headingDeg));
+	return h <= HEADING_GATE_DEG || std::abs(h - 180.0) <= HEADING_GATE_DEG;
+}
+
+static bool validDistanceIn(double d) { return d >= DIST_MIN_IN && d <= DIST_MAX_IN; }
+
+// Forward declaration: defined later after controller/sensor setup.
+extern lemlib::Chassis chassis;
+
+// Fuse left/right distance sensors into X-position estimate (east-west axis)
+static void applyDistanceLocalizationX() {
+	lemlib::Pose pose = chassis.getPose();
+
+	if (!headingAllowsWallCorrection(pose.theta)) return;
+
+	const double leftIn = left_distance.get() / 25.4;
+	const double rightIn = right_distance.get() / 25.4;
+
+	const bool leftValid = validDistanceIn(leftIn);
+	const bool rightValid = validDistanceIn(rightIn);
+
+	if (!leftValid && !rightValid) return;
+
+	// If X=0 is WEST wall and +X is EAST:
+	// left sensor (pointing WEST):  x = d_left + left_offset
+	// right sensor (pointing EAST): x = field_width - d_right - right_offset
+	double xEstimate = pose.x;
+	if (leftValid && rightValid) {
+		const double fromLeft = leftIn + LEFT_SENSOR_OFFSET_IN;
+		const double fromRight = FIELD_WIDTH_IN - rightIn - RIGHT_SENSOR_OFFSET_IN;
+		xEstimate = (fromLeft + fromRight) * 0.5;
+	} else if (leftValid) {
+		xEstimate = leftIn + LEFT_SENSOR_OFFSET_IN;
+	} else {
+		xEstimate = FIELD_WIDTH_IN - rightIn - RIGHT_SENSOR_OFFSET_IN;
+	}
+
+	if (xEstimate < 0) xEstimate = 0;
+	if (xEstimate > FIELD_WIDTH_IN) xEstimate = FIELD_WIDTH_IN;
+
+	chassis.setPose(xEstimate, pose.y, pose.theta);
+}
+
+// Tracking wheel setup
+// Sign convention:
+// vertical wheel: left of center = negative, right of center = positive
+// horizontal wheel: behind center = negative, in front = positive
+lemlib::TrackingWheel vertical_tracking_wheel(&vertical_encoder,
+                                              lemlib::Omniwheel::NEW_275,
+                                              -2.0,
+                                              1.0);
+lemlib::TrackingWheel horizontal_tracking_wheel(&horizontal_encoder,
+                                                lemlib::Omniwheel::NEW_275,
+                                                -5.0,
+                                                1.0);
 
 // Odometry sensors configuration
-lemlib::OdomSensors sensors(&vertical_tracking_wheel_left,  // vertical tracking wheel 1 (left)
-                            &vertical_tracking_wheel_right, // vertical tracking wheel 2 (right)
-                            nullptr, // horizontal tracking wheel 1 (not used)
+lemlib::OdomSensors sensors(&vertical_tracking_wheel,  // vertical tracking wheel 1
+                            nullptr, // vertical tracking wheel 2
+                            &horizontal_tracking_wheel, // horizontal tracking wheel 1
                             nullptr, // horizontal tracking wheel 2 (not used)
                             &imu     // inertial sensor
 );
@@ -59,18 +121,30 @@ lemlib::ControllerSettings lateral_controller(10,  // proportional gain (kP)
 
 // Angular (turning) controller settings
 lemlib::ControllerSettings angular_controller(2,   // proportional gain (kP)
-                                               0,   // integral gain (kI)
-                                               10,  // derivative gain (kD)
-                                               3,   // anti windup
-                                               1,   // small error range (degrees)
+                                                0,   // integral gain (kI)
+                                                10,  // derivative gain (kD)
+                                                3,   // anti windup
+                                                1,   // small error range (degrees)
                                                100, // small error timeout (ms)
                                                3,   // large error range (degrees)
                                                500, // large error timeout (ms)
-                                               0    // max acceleration (slew)
+                                                0    // max acceleration (slew)
 );
 
-// Chassis object - combines drivetrain, sensors, and PID controllers
-lemlib::Chassis chassis(drivetrain, lateral_controller, angular_controller, sensors);
+// Throttle/Steer priority curves
+// Slight steer-priority setup:
+// - throttle has lower minimum output
+// - steer has higher minimum output
+lemlib::ExpoDriveCurve throttle_curve(3, 6, 1.019);
+lemlib::ExpoDriveCurve steer_curve(3, 10, 1.019);
+
+// Chassis object - includes drive curves for throttle/steer priority
+lemlib::Chassis chassis(drivetrain,
+                        lateral_controller,
+                        angular_controller,
+                        sensors,
+                        &throttle_curve,
+                        &steer_curve);
 
 
 
@@ -147,31 +221,18 @@ void opcontrol() {
 	pros::Controller master(pros::E_CONTROLLER_MASTER);
 
 	while (true) {
-		// Get distance sensor readings (in mm, convert to inches for display)
-		double front_distance_mm = distance_front.get_distance();
-		double back_distance_mm = distance_back.get_distance();
-		double front_distance_in = front_distance_mm / 25.4;
-		double back_distance_in = back_distance_mm / 25.4;
-
-		// Display distance readings on brain screen
-		pros::screen::print(TEXT_MEDIUM, 2, "Front: %.1f in", front_distance_in);
-		pros::screen::print(TEXT_MEDIUM, 3, "Back: %.1f in", back_distance_in);
+		applyDistanceLocalizationX();
 
 		// Get current pose from odometry
 		lemlib::Pose pose = chassis.getPose();
-		pros::screen::print(TEXT_MEDIUM, 4, "X: %.1f Y: %.1f", pose.x, pose.y);
-		pros::screen::print(TEXT_MEDIUM, 5, "Heading: %.1f", pose.theta);
+		pros::screen::print(TEXT_MEDIUM, 2, "X: %.1f Y: %.1f", pose.x, pose.y);
+		pros::screen::print(TEXT_MEDIUM, 3, "Heading: %.1f", pose.theta);
 
-		// Arcade control scheme using chassis
-		int dir = master.get_analog(ANALOG_LEFT_Y);    // Gets amount forward/backward from left joystick
-		int turn = master.get_analog(ANALOG_RIGHT_X);  // Gets the turn left/right from right joystick
-		chassis.arcade(dir, turn);
-
-		// Optional: Use distance sensor for collision avoidance
-		// If object detected within 12 inches in front, stop or slow down
-		if (front_distance_mm > 0 && front_distance_mm < 304.8) { // 12 inches = 304.8 mm
-			master.rumble("-"); // Rumble controller to warn driver
-		}
+		// Double-stick curvature drive:
+		// left Y = throttle, right X = steer
+		const int throttle = master.get_analog(ANALOG_LEFT_Y);
+		const int steer = master.get_analog(ANALOG_RIGHT_X);
+		chassis.curvature(throttle, steer, false); // false -> use throttle/steer curves
 
 		pros::delay(20); // Run for 20 ms then update
 	}
