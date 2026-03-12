@@ -2,9 +2,17 @@
 #include "lemlib/api.hpp" // IWYU pragma: keep
 #include <cmath>
 
+// controller
+pros::Controller controller(pros::E_CONTROLLER_MASTER);
+
 // lemlib config
 pros::MotorGroup left_motors({1, -2, 3}, pros::MotorGearset::green);
 pros::MotorGroup right_motors({-4, 5, -6}, pros::MotorGearset::green);
+
+// intake, roller, and top hat (added from reference project)
+pros::Motor intake(7, pros::MotorGearset::blue);
+pros::Motor intake_roller(8, pros::MotorGearset::blue);
+pros::Motor top_hat(9, pros::MotorGearset::blue);
 
 // Drivetrain settings
 // TODO: tune these for your exact robot
@@ -26,6 +34,8 @@ pros::Rotation horizontal_encoder(12); // horizontal odom wheel
 // Left sensor points WEST wall, right sensor points EAST wall
 pros::Distance left_distance(13);
 pros::Distance right_distance(14);
+// Forward-facing sensor for front-wall alignment logic from reference code
+pros::Distance distance_front(15);
 
 // Field / robot geometry for distance-sensor localization (inches)
 constexpr double FIELD_WIDTH_IN = 144.0;         // 12 ft field
@@ -155,6 +165,7 @@ lemlib::Chassis chassis(drivetrain,
  * to keep execution time for this mode under a few seconds.
  */
 void initialize() {
+	pros::lcd::initialize();
 	pros::screen::erase();
 	pros::screen::print(TEXT_MEDIUM, 1, "Hello PROS User!");
 
@@ -171,6 +182,20 @@ void initialize() {
 
 	// Set initial pose (x, y, theta) - adjust based on your starting position
 	chassis.setPose(0, 0, 0);
+
+	// Persistent screen task (reference behavior + local odom debug)
+	static pros::Task screen_task([] {
+		while (true) {
+			const lemlib::Pose pose = chassis.getPose();
+			pros::lcd::print(0, "X: %.2f", pose.x);
+			pros::lcd::print(1, "Y: %.2f", pose.y);
+			pros::lcd::print(2, "Theta: %.2f", pose.theta);
+			pros::lcd::print(3, "Front dist: %d mm", distance_front.get());
+			pros::lcd::print(4, "Left dist: %d mm", left_distance.get());
+			pros::lcd::print(5, "Right dist: %d mm", right_distance.get());
+			pros::delay(20);
+		}
+	});
 }
 
 /**
@@ -202,7 +227,72 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() {}
+// Align robot to be ~2cm (20mm) from side wall using distance sensor
+void alignToWall(double target_mm = 20.0, int timeout_ms = 1500) {
+	const int start = pros::millis();
+	while (pros::millis() - start < timeout_ms) {
+		double dist = left_distance.get();
+		if (dist <= 0) break; // sensor error, bail
+		double error = dist - target_mm;
+		if (std::fabs(error) < 5.0) break; // within 5mm tolerance
+
+		// P-controller: small differential correction to push toward/away from wall
+		double correction = error * 0.4;
+		if (correction > 25) correction = 25;
+		if (correction < -25) correction = -25;
+
+		left_motors.move(correction);
+		right_motors.move(-correction);
+		pros::delay(10);
+	}
+	left_motors.move(0);
+	right_motors.move(0);
+	pros::delay(50);
+}
+
+// Match auton
+void matchAuton() {
+	// Start pose from reference path
+	chassis.setPose(65.98, -14.71, 0);
+
+	// Spin intake + roller for opening action
+	intake.move_velocity(100);
+	intake_roller.move_velocity(100);
+
+	chassis.moveToPoint(66.47, 15.29, 3000, {.forwards = false});
+	intake.move_velocity(0);
+	intake_roller.move_velocity(0);
+
+	alignToWall(20.0, 1500);
+
+	chassis.moveToPoint(23.93, 24.22, 3000);
+	chassis.moveToPoint(5.74, 5.70, 3000);
+	chassis.moveToPoint(46.70, 23.65, 4000);
+	chassis.moveToPoint(46.22, 47.20, 3000);
+	chassis.moveToPoint(68.82, 46.84, 3000);
+	chassis.moveToPoint(46.07, 61.37, 3000);
+	chassis.moveToPoint(-46.28, 63.31, 5000);
+	chassis.moveToPoint(-47.66, 47.17, 3000);
+	chassis.moveToPoint(-22.76, 47.33, 3000);
+	chassis.moveToPoint(-67.37, 47.00, 4000);
+	chassis.moveToPoint(-46.52, 30.06, 3000);
+	chassis.moveToPoint(-64.28, 23.60, 3000);
+	chassis.moveToPoint(-67.87, -22.01, 4000);
+	chassis.moveToPoint(-48.11, -23.05, 3000);
+	chassis.moveToPoint(-49.44, -46.48, 3000);
+	chassis.moveToPoint(-66.42, -47.04, 3000);
+	chassis.moveToPoint(-46.25, -63.41, 3000);
+	chassis.moveToPoint(46.75, -62.56, 5000);
+	chassis.moveToPoint(48.17, -46.66, 3000);
+	chassis.moveToPoint(20.13, -47.85, 3000);
+	chassis.moveToPoint(67.95, -46.72, 4000);
+	chassis.moveToPoint(58.87, -43.58, 2000);
+	chassis.moveToPoint(58.47, 2.10, 4000);
+}
+
+void autonomous() {
+	matchAuton();
+}
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -218,8 +308,6 @@ void autonomous() {}
  * task, not resume it from where it left off.
  */
 void opcontrol() {
-	pros::Controller master(pros::E_CONTROLLER_MASTER);
-
 	while (true) {
 		applyDistanceLocalizationX();
 
@@ -230,9 +318,31 @@ void opcontrol() {
 
 		// Double-stick curvature drive:
 		// left Y = throttle, right X = steer
-		const int throttle = master.get_analog(ANALOG_LEFT_Y);
-		const int steer = master.get_analog(ANALOG_RIGHT_X);
+		const int throttle = controller.get_analog(ANALOG_LEFT_Y);
+		const int steer = controller.get_analog(ANALOG_RIGHT_X);
 		chassis.curvature(throttle, steer, false); // false -> use throttle/steer curves
+
+		// Added mechanism controls from reference project mapping
+		const bool intakeIn = controller.get_digital(DIGITAL_R1);
+		const bool intakeOut = controller.get_digital(DIGITAL_R2);
+		if (intakeIn) {
+			intake.move_velocity(200);
+			intake_roller.move_velocity(200);
+		} else if (intakeOut) {
+			intake.move_velocity(-200);
+			intake_roller.move_velocity(-200);
+		} else {
+			intake.move_velocity(0);
+			intake_roller.move_velocity(0);
+		}
+
+		if (controller.get_digital(DIGITAL_L1)) {
+			top_hat.move_velocity(100);
+		} else if (controller.get_digital(DIGITAL_L2)) {
+			top_hat.move_velocity(-100);
+		} else {
+			top_hat.move_velocity(0);
+		}
 
 		pros::delay(20); // Run for 20 ms then update
 	}
