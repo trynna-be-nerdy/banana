@@ -14,14 +14,17 @@ pros::Motor intake(7, pros::MotorGearset::blue);
 pros::Motor intake_roller(8, pros::MotorGearset::blue);
 pros::Motor top_hat(9, pros::MotorGearset::blue);
 
+// Match loader piston (ADI port A)
+pros::adi::DigitalOut match_loader('A');
+
 // Drivetrain settings
 // TODO: tune these for your exact robot
 lemlib::Drivetrain drivetrain(&left_motors, // left motor group
                                &right_motors, // right motor group
                                11.5, // track width in inches
-                               lemlib::Omniwheel::NEW_4, // drivetrain wheel diameter
-                               600, // drivetrain rpm
-                               2 // horizontal drift
+                               3.25, // drivetrain wheel diameter
+                               200, // drivetrain rpm (green gearset)
+                               8 // horizontal drift (traction wheels)
 );
 
 // IMU + odometry sensors (as requested)
@@ -34,8 +37,6 @@ pros::Rotation horizontal_encoder(12); // horizontal odom wheel
 // Left sensor points WEST wall, right sensor points EAST wall
 pros::Distance left_distance(13);
 pros::Distance right_distance(14);
-// Forward-facing sensor for front-wall alignment logic from reference code
-pros::Distance distance_front(15);
 
 // Field / robot geometry for distance-sensor localization (inches)
 constexpr double FIELD_WIDTH_IN = 144.0;         // 12 ft field
@@ -100,11 +101,11 @@ static void applyDistanceLocalizationX() {
 // vertical wheel: left of center = negative, right of center = positive
 // horizontal wheel: behind center = negative, in front = positive
 lemlib::TrackingWheel vertical_tracking_wheel(&vertical_encoder,
-                                              lemlib::Omniwheel::NEW_275,
+                                              3.25,
                                               -2.0,
                                               1.0);
 lemlib::TrackingWheel horizontal_tracking_wheel(&horizontal_encoder,
-                                                lemlib::Omniwheel::NEW_275,
+                                                3.25,
                                                 -5.0,
                                                 1.0);
 
@@ -118,9 +119,9 @@ lemlib::OdomSensors sensors(&vertical_tracking_wheel,  // vertical tracking whee
 
 // PID controllers for chassis movement
 // Lateral (forward/backward) controller settings
-lemlib::ControllerSettings lateral_controller(10,  // proportional gain (kP)
+lemlib::ControllerSettings lateral_controller(8,   // proportional gain (kP)
                                                0,   // integral gain (kI)
-                                               3,   // derivative gain (kD)
+                                               40,  // derivative gain (kD)
                                                3,   // anti windup
                                                1,   // small error range (inches)
                                                100, // small error timeout (ms)
@@ -130,9 +131,9 @@ lemlib::ControllerSettings lateral_controller(10,  // proportional gain (kP)
 );
 
 // Angular (turning) controller settings
-lemlib::ControllerSettings angular_controller(2,   // proportional gain (kP)
+lemlib::ControllerSettings angular_controller(3,   // proportional gain (kP)
                                                 0,   // integral gain (kI)
-                                                10,  // derivative gain (kD)
+                                                20,  // derivative gain (kD)
                                                 3,   // anti windup
                                                 1,   // small error range (degrees)
                                                100, // small error timeout (ms)
@@ -190,9 +191,8 @@ void initialize() {
 			pros::lcd::print(0, "X: %.2f", pose.x);
 			pros::lcd::print(1, "Y: %.2f", pose.y);
 			pros::lcd::print(2, "Theta: %.2f", pose.theta);
-			pros::lcd::print(3, "Front dist: %d mm", distance_front.get());
-			pros::lcd::print(4, "Left dist: %d mm", left_distance.get());
-			pros::lcd::print(5, "Right dist: %d mm", right_distance.get());
+			pros::lcd::print(3, "Left dist: %d mm", left_distance.get());
+			pros::lcd::print(4, "Right dist: %d mm", right_distance.get());
 			pros::delay(20);
 		}
 	});
@@ -326,11 +326,11 @@ void opcontrol() {
 		const bool intakeIn = controller.get_digital(DIGITAL_R1);
 		const bool intakeOut = controller.get_digital(DIGITAL_R2);
 		if (intakeIn) {
-			intake.move_velocity(200);
-			intake_roller.move_velocity(200);
+			intake.move_velocity(100);
+			intake_roller.move_velocity(100);
 		} else if (intakeOut) {
-			intake.move_velocity(-200);
-			intake_roller.move_velocity(-200);
+			intake.move_velocity(-100);
+			intake_roller.move_velocity(-100);
 		} else {
 			intake.move_velocity(0);
 			intake_roller.move_velocity(0);
@@ -342,6 +342,13 @@ void opcontrol() {
 			top_hat.move_velocity(-100);
 		} else {
 			top_hat.move_velocity(0);
+		}
+
+		// Match loader piston toggle (A button)
+		if (controller.get_digital_new_press(DIGITAL_A)) {
+			static bool match_loader_state = false;
+			match_loader_state = !match_loader_state;
+			match_loader.set_value(match_loader_state);
 		}
 
 		pros::delay(20); // Run for 20 ms then update
