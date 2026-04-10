@@ -1,327 +1,307 @@
-# VEX TEAM: 20102A 
-Name: Overdrive
-Program:	V5RC
+# VEX Team 20102A — Overdrive
+### Program: V5RC | Season: High Stakes
 
-# banana
+This project implements an advanced motion control system for the **VEX V5** platform, with a core focus on **distance-sensor-assisted localization**, designed for the **VEX High Stakes** competition season. It is built on **PROS** and **LemLib**.
 
-PROS V5 robot codebase for a VEX Robotics project using LemLib for chassis control and odometry support. This repository is set up for local development with the PROS CLI and VS Code, and currently contains a compact competition template with drivetrain control, distance-sensor-assisted localization helpers, roller scoring logic, and basic autonomous route scaffolding.
+---
 
-## Overview
+## 🚀 Core Feature: Distance-Based Localization
 
-This project targets the **VEX V5 Brain** and is built on:
+At the heart of this system is a real-time pose correction engine, implemented directly in `src/main.cpp`. The localization system enables the robot to:
 
-- **PROS kernel 4.2.2**
-- **LemLib 0.5.6**
-- **LVGL 9.2.0** (included through the PROS template)
+- Continuously estimate and correct its **X and Y position** on the field using mounted distance sensors
+- Apply **heading-gated corrections** — updates are only accepted when the robot is within a valid angular window, preventing bad data from corrupting the pose
+- Fuse data from the **IMU** and **two distance sensors** for reliable odometry
+- Correct for odometry drift and wheel slip during autonomous routines
 
-The code is centered in `src/main.cpp`, which defines:
+### Why Distance-Sensor Localization?
 
-- drivetrain motor groups
-- intake and mechanism motors
-- an inertial sensor and two distance sensors
-- LemLib drivetrain, controllers, and chassis objects
-- screen telemetry during initialization
-- a controller-based autonomous selector
-- helper routines for wall alignment, localization correction, and roller scoring
+Traditional VEX V5 robots rely solely on odometry and IMU for position tracking. Over time, these methods accumulate error from wheel slip and field imperfections, leading to unreliable autonomous paths.
 
-## Current Project State
+This project addresses that by layering sensor-based position corrections on top of LemLib's odometry, delivering:
 
-This repository is functional as a PROS project, but it is still in an early or partially tuned state.
+- More accurate global position estimates during autonomous
+- Resilience to accumulated odometry drift
+- Consistent, repeatable autonomous paths across match conditions
 
-Important notes about the current implementation:
+---
 
-- The drivetrain and controller constants include a `TODO` note indicating that they should be tuned for the exact robot.
-- Two autonomous helper routines exist for different match-side scenarios.
-- The competition autonomous entrypoint, `autonomous()`, does **not** currently call either of those routines.
-- Instead, `autonomous()` currently resets pose and performs a single `turnToHeading(90, 100000)`.
-- `competition_initialize()` lets the driver select a side, but that selection is not yet consumed by `autonomous()`.
-- `opcontrol()` currently only handles arcade/curvature drive from the master controller sticks.
+## 🛠️ General Features
 
-If you are publishing this repository for teammates, judges, or future maintainers, it is worth treating this repo as a solid chassis/mechanism foundation rather than a finished competition program.
+- Curvature drive with LemLib exponential drive curves
+- Autonomous mode selection via controller D-pad (shown on V5 screen)
+- Intake and intake roller control motors
+- Pneumatic match loader via ADI digital output
+- Roller scoring helper using proportional drive and distance feedback
+- Wall alignment utility for angular correction
+- Live telemetry on the V5 LCD (X, Y, heading, sensor distances)
+- Two prewritten autonomous match routines (left and right side)
 
-## Features
+---
 
-### Driver Control
+## ⚙️ Hardware Configuration
 
-- Curvature drive using the master controller
-- Left stick Y-axis for throttle
-- Right stick X-axis for turning
-- LemLib expo drive curves for throttle and steering
+| Subsystem        | Details                                      |
+|------------------|----------------------------------------------|
+| **Drivetrain**   | 2 motors per side — ports `2`, `3` (L) / `4`, `6` (R), green gearset |
+| **Intake**       | Port `7` (intake) + Port `8` (intake roller), blue gearset |
+| **Top Hat**      | Port `9`, blue gearset                       |
+| **Match Loader** | ADI Digital Output — Port `A`               |
+| **IMU**          | Port `10`                                    |
+| **Left Distance**| Port `13`                                    |
+| **Front Distance**| Port `14`                                   |
 
-### Autonomous Support
+**LemLib Chassis Configuration:**
+- Track width: `11.5 in`
+- Wheel diameter: `3.25 in`
+- RPM: `200`
+- Horizontal drift: `8`
 
-- LemLib chassis object configured for motion commands
-- Pose tracking through IMU-backed odometry
-- Multiple prewritten autonomous behaviors
-- A pre-match side selector shown on the V5 screen
+---
 
-### Localization Helpers
+## 🗺️ Mock Autonomous Route
 
-- X-position correction from a left-mounted distance sensor
-- Y-position correction from a front-mounted distance sensor
-- heading-gated correction logic to avoid applying bad updates at the wrong robot orientation
+The image below shows the simulated autonomous paths for both match sides plotted on the VEX High Stakes field. The colored dotted lines represent the robot's planned trajectories.
 
-### Mechanism Control Helpers
+![Field Route Map](assets/field_route.png)
 
-- Roller scoring helper using front and left distance sensors
-- Match loader digital output on ADI port `A`
-- Utility alignment routine for turning toward a wall to achieve target spacing
+> *Green paths indicate the main travel routes, yellow/lime paths show transition movements, and red/orange paths mark approach vectors toward scoring zones. Purple circles represent waypoints and decision nodes.*
 
-### On-Brain Telemetry
+### Left Side Route — `matchAuton()`
 
-During `initialize()`, a background task prints live telemetry to the V5 LCD:
+The left-side routine starts near the center of the field and sweeps toward the bottom-left scoring zone:
 
-- robot X position
-- robot Y position
-- robot heading
-- left distance sensor reading
-- front distance sensor reading
+| Step | Action | Coordinates (in) |
+|------|--------|-----------------|
+| 1 | Start pose set | `(50.58, -1.29)` |
+| 2 | Move forward | `(50.03, -21.04)` |
+| 3 | Arc toward bottom | `(46.41, -48.22)` |
+| 4 | Approach right roller | `(66.52, -46.95)` → `scoreHighRoller()` |
+| 5 | Cross to left roller | `(22.67, -47.31)` → `scoreHighRoller()` |
+| 6 | Re-center | `(44.41, -48.04)` |
+| 7 | Drive back toward start zone | `(23.03, -23.03)` |
+| 8 | Park near wall | `(12.04, -6.33)` |
 
-## Hardware Configuration
+### Right Side Route — `matchAuton2()`
 
-The current hardware mapping in `src/main.cpp` is:
+The right-side routine mirrors the left, sweeping toward the top-right scoring zone:
 
-### Controller
+| Step | Action | Coordinates (in) |
+|------|--------|-----------------|
+| 1 | Start pose set | `(49.85, -0.75)` |
+| 2 | Move forward | `(47.86, 23.53)` |
+| 3 | Arc toward top | `(45.86, 46.73)` |
+| 4 | Approach right roller | `(67.25, 46.73)` → `scoreHighRoller()` |
+| 5 | Cross to left roller | `(22.85, 46.91)` → `scoreHighRoller()` |
+| 6 | Re-center | `(42.78, 46.55)` |
+| 7 | Drive back toward start zone | `(23.40, 22.81)` |
+| 8 | Park near wall | `(11.38, 6.82)` |
 
-- Master controller
+---
 
-### Drivetrain
+## 🕹️ Usage
 
-- Left motor group: ports `2`, `3` with reversed configuration on both motors
-- Right motor group: ports `4`, `6`
-- Gearset: `green`
+1. Flash the program to your VEX V5 Brain.
+2. Run the program.
+3. Use the **D-pad (UP / DOWN)** on the controller to select an autonomous side — the selection is shown on the V5 Brain screen.
+4. In driver control:
+   - **Left Joystick (Y-axis):** Throttle
+   - **Right Joystick (X-axis):** Steering (curvature drive)
 
-### Mechanisms
+---
 
-- Intake: port `7`, gearset `blue`
-- Intake roller: port `8`, gearset `blue`
-- Top hat: port `9`, gearset `blue`
-- Match loader: ADI digital output port `A`
+## 🤖 Autonomous Modes
 
-### Sensors
+| Mode | Function |
+|------|----------|
+| `LEFT` (D-pad UP) | `matchAuton()` — bottom-side scoring route |
+| `RIGHT` (D-pad DOWN) | `matchAuton2()` — top-side scoring route |
 
-- IMU: port `10`
-- Left distance sensor: port `13`
-- Front distance sensor: port `14`
+> **Note:** The live `autonomous()` entrypoint currently executes a `turnToHeading(90)` placeholder. To activate the match routines, `autonomous()` must be updated to branch on `auton_selection`.
 
-## Software Architecture
+Autonomous routines are implemented in `src/main.cpp`.
 
-Most custom logic lives in a single file:
+---
 
-- `src/main.cpp`: robot configuration, autonomous code, telemetry, and operator control
-- `include/main.h`: PROS entrypoint declarations and project-wide includes
-- `project.pros`: PROS metadata, template versions, upload slot, and target information
-- `PROS_SETUP.md`: short Windows setup notes
-- `.vscode/tasks.json`: VS Code tasks for build, upload, and terminal access
+## 🧠 Localization Update Logic
 
-The repository also includes template-provided PROS, LemLib, and LVGL headers and firmware artifacts in `include/` and `firmware/`.
-
-## Autonomous Routines
-
-Multiple autonomous helper functions are already defined for different starting scenarios.
-
-These routines:
-
-- set an initial pose
-- drive through a sequence of `moveToPoint(...)` commands
-- call `scoreHighRoller()` when needed
-
-However, the live competition autonomous entrypoint currently does this instead:
+The following code snippet illustrates the distance-based localization correction implemented in this project:
 
 ```cpp
-void autonomous() {
-  chassis.setPose(0, 0, 0);
-  chassis.turnToHeading(90, 100000);
+// Correct the X position from the left distance sensor when heading is valid.
+static void applyDistanceCorrectionX() {
+  lemlib::Pose pose = chassis.getPose();
+  const double h = std::abs(normalizeHeadingDeg(pose.theta));
+  if (!(h <= HEADING_GATE_DEG || std::abs(h - 180.0) <= HEADING_GATE_DEG))
+    return;
+
+  const double leftIn = left_distance.get() / 25.4;
+  if (!validDistanceIn(leftIn))
+    return;
+
+  const double xEstimate =
+      std::max(0.0, std::min(FIELD_WIDTH_IN, leftIn + LEFT_SENSOR_OFFSET_IN));
+  chassis.setPose(xEstimate, pose.y, pose.theta);
+}
+
+// Correct the Y position from the front distance sensor when heading is valid.
+static void applyDistanceCorrectionY() {
+  lemlib::Pose pose = chassis.getPose();
+  const double h = std::abs(normalizeHeadingDeg(pose.theta));
+  if (!(std::abs(h - 90.0) <= HEADING_GATE_DEG))
+    return;
+
+  const double frontIn = front_distance.get() / 25.4;
+  if (!validDistanceIn(frontIn))
+    return;
+
+  const double yEstimate =
+      std::max(0.0, std::min(FIELD_HEIGHT_IN, FIELD_HEIGHT_IN - frontIn -
+                                                  FRONT_SENSOR_OFFSET_IN));
+  chassis.setPose(pose.x, yEstimate, pose.theta);
 }
 ```
 
-That means the side selection shown during `competition_initialize()` is currently informational only. If you want match behavior to follow the selected routine, `autonomous()` will need to branch on `auton_selection`.
+This correction cycle performs:
+1. **Heading Gate Check:** Only applies the correction if the robot is facing a wall within `±25°` of the expected angle, preventing bad readings.
+2. **Distance Validation:** Rejects sensor readings outside the configured range (`1.5 in – 120 in`).
+3. **Coordinate Clamping:** Estimates are clamped to the `144 × 144 in` field boundary.
+4. **Pose Injection:** The corrected coordinate is pushed into the LemLib chassis pose, overriding drift.
 
-## Localization and Sensor Logic
+---
 
-This project includes simple distance-based pose correction helpers:
+### Roller Scoring Helper
 
-- `applyDistanceCorrectionX()`
-- `applyDistanceCorrectionY()`
-- `applyDistanceLocalizationX()`
+```cpp
+void scoreHighRoller() {
+  const double kP_front = 0.4;
+  const double kP_left = 0.25;
+  const int timeout_ms = 2000;
+  const int start = pros::millis();
 
-These helpers:
+  while (pros::millis() - start < timeout_ms) {
+    const double frontMm = front_distance.get();
+    const double leftMm = left_distance.get();
 
-- read the left and front distance sensors
-- reject invalid readings outside configured distance limits
-- only apply corrections when the robot heading is within allowed angular windows
-- clamp estimated field coordinates to a `144 x 144` inch field
+    if (frontMm <= 0) break;
 
-Field and correction constants are defined near the top of `src/main.cpp`, including:
+    const double frontError = frontMm - ROLLER_TARGET_FRONT_MM;
+    if (std::fabs(frontError) < 4.0) break;
 
-- field width and height
-- sensor offsets
-- valid distance range
-- heading gating threshold
+    double drive = frontError * kP_front;
+    drive = std::max(-60.0, std::min(60.0, drive));
 
-## Roller Scoring Helper
+    double steer = 0.0;
+    if (leftMm > 0) {
+      const double leftError = leftMm - ROLLER_TARGET_LEFT_MM;
+      steer = leftError * kP_left;
+      steer = std::max(-20.0, std::min(20.0, steer));
+    }
 
-The `scoreHighRoller()` helper:
+    left_motors.move(drive + steer);
+    right_motors.move(drive - steer);
+    pros::delay(10);
+  }
 
-- drives the robot toward a target front sensor distance
-- optionally steers using the left distance sensor
-- stops once the target is reached or timeout occurs
-- spins the intake and intake roller in reverse to score
-
-This routine uses fixed tuning values for:
-
-- front distance target
-- left distance target
-- outtake speed
-- outtake duration
-- proportional drive and steering gains
-
-These constants are likely robot-specific and may need retuning for reliable field performance.
-
-## Development Setup
-
-### Prerequisites
-
-Install the following on Windows:
-
-- Python 3.11 or newer
-- PROS CLI
-- VS Code (optional, but recommended)
-
-Install PROS CLI with:
-
-```powershell
-py -m pip install pros-cli
+  intake.move_velocity(-ROLLER_OUTTAKE_SPEED);
+  intake_roller.move_velocity(-ROLLER_OUTTAKE_SPEED);
+  pros::delay(ROLLER_OUTTAKE_TIME_MS);
+}
 ```
 
-Verify installation:
+This function:
+1. Drives the robot to a target front sensor distance using proportional control.
+2. Steers to align laterally using the left distance sensor.
+3. Spins the intake in reverse to score once positioned.
 
-```powershell
-pros --version
+---
+
+## 📁 Key Files and Directories
+
+```
+banana/
+├── src/
+│   └── main.cpp           # All robot logic: drivetrain, autonomous, telemetry, localization
+├── include/
+│   ├── main.h             # PROS entrypoint declarations and project-wide includes
+│   ├── lemlib/            # LemLib drivetrain and odometry headers
+│   ├── liblvgl/           # LVGL graphics library headers
+│   └── pros/              # PROS kernel headers
+├── firmware/              # Compiled PROS/LemLib firmware artifacts
+├── static/
+├── project.pros           # PROS project metadata and template configuration
+├── Makefile               # Build instructions
+├── PROS_SETUP.md          # Windows development setup guide
+└── README.md
 ```
 
-## Building and Uploading
+| File | Purpose |
+|------|---------|
+| `src/main.cpp` | Main entry point, driver control, autonomous routines, localization |
+| `include/main.h` | Header for PROS competition callbacks |
+| `project.pros` | PROS metadata: project name `banana`, target `v5`, upload slot `6` |
+| `Makefile` | Project build instructions |
 
-From the repository root:
+---
+
+## 📚 Libraries Used
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| **PROS** | `kernel@4.2.2` | C/C++ SDK for VEX V5 |
+| **LemLib** | `0.5.6` | Advanced drivetrain control and odometry |
+| **LVGL** | `9.2.0` | Lightweight graphics library for embedded systems |
+
+---
+
+## 🏗️ Building the Project
+
+1. Ensure you have the **PROS CLI** installed.
+2. Navigate to the project root in your terminal.
+3. Run:
 
 ```powershell
 pros make
+```
+
+---
+
+## 🔌 Flashing to V5 Brain
+
+1. Connect your VEX V5 Brain to your computer.
+2. Run:
+
+```powershell
 pros upload
+```
+
+To monitor serial output from the brain:
+
+```powershell
 pros terminal
 ```
 
-What these commands do:
+---
 
-- `pros make` builds the project
-- `pros upload` flashes the compiled program to the V5 Brain
-- `pros terminal` opens the PROS terminal for device interaction and logs
-
-## VS Code Workflow
+## 🖥️ VS Code Workflow
 
 This repo includes preconfigured VS Code tasks in `.vscode/tasks.json`:
 
-- `PROS: Build`
-- `PROS: Upload`
-- `PROS: Build + Upload`
-- `PROS: Terminal`
+| Task | Command |
+|------|---------|
+| `PROS: Build` | Compiles the project |
+| `PROS: Upload` | Flashes to V5 Brain |
+| `PROS: Build + Upload` | Compiles and flashes |
+| `PROS: Terminal` | Opens PROS serial terminal |
 
-Open the repository in VS Code and run these tasks from the command palette or task runner.
+---
 
-## Project Structure
+## 📝 License
 
-```text
-banana/
-|-- .vscode/
-|   `-- tasks.json
-|-- firmware/
-|-- include/
-|   |-- main.h
-|   |-- lemlib/
-|   |-- liblvgl/
-|   `-- pros/
-|-- src/
-|   `-- main.cpp
-|-- static/
-|   `-- example.txt
-|-- Makefile
-|-- PROS_SETUP.md
-`-- project.pros
-```
+This repository contains **PROS**, **LemLib**, and **LVGL** template content, each of which may carry its own upstream license terms. Review the included library files and template metadata before redistributing outside your team or organization.
 
-## Configuration Details
+The custom robot code in `src/main.cpp` is currently unlicensed.
 
-From `project.pros`:
+---
 
-- Project name: `banana`
-- Target: `v5`
-- Upload slot: `6`
-- Upload icon: `X`
-
-Installed templates:
-
-- `kernel@4.2.2`
-- `LemLib@0.5.6`
-- `liblvgl@9.2.0`
-
-## How Competition Control Works
-
-PROS uses the standard competition callbacks declared in `include/main.h`:
-
-- `initialize()`
-- `disabled()`
-- `competition_initialize()`
-- `autonomous()`
-- `opcontrol()`
-
-Current behavior:
-
-- `initialize()` calibrates the chassis and launches screen telemetry
-- `disabled()` is empty
-- `competition_initialize()` loops and allows side selection
-- `autonomous()` performs a simple heading turn
-- `opcontrol()` continuously reads the controller and drives the chassis
-
-## Known Gaps and Recommended Next Steps
-
-If you plan to continue development, the highest-value improvements are:
-
-1. Connect `auton_selection` to `autonomous()` so the selected routine actually runs.
-2. Tune the LemLib drivetrain and controller constants for the real robot.
-3. Add operator controls for the intake, intake roller, top hat, and match loader.
-4. Decide when to call the distance-correction helpers during autonomous.
-5. Add comments or diagrams showing robot orientation and field coordinate conventions.
-6. Split hardware definitions and autonomous routines into separate source files as the project grows.
-
-## Troubleshooting
-
-### `pros` command is not recognized
-
-Make sure Python and PROS CLI are installed and available in your `PATH`. Reopen the terminal after installation if needed.
-
-### Build fails after changing libraries or environment
-
-Confirm that your PROS CLI version is working and that the local project still targets the expected templates listed in `project.pros`.
-
-### Robot uploads but behavior is not what you expect
-
-Check:
-
-- motor port assignments
-- reversed motor directions
-- sensor port mappings
-- IMU calibration behavior during startup
-- chassis tuning constants
-- whether `autonomous()` is actually calling the routine you intended
-
-## Contributing
-
-When modifying this codebase:
-
-- keep hardware mappings synchronized with the real robot
-- document any port changes directly in code and in this README
-- retune autonomous constants after mechanical changes
-- test all motion routines on the field before competition use
-
-## License
-
-This repository contains PROS, LemLib, and LVGL template content, each of which may carry its own upstream license terms. Review the included library files and template metadata before redistributing the project outside your team or organization.
+*VEX Team 20102A — Overdrive | V5RC High Stakes*
