@@ -1,4 +1,4 @@
-# VEX Team 20102A — Overdrive
+# Monte Carlo Localization for VEX V5
 ### Program: V5RC | Season: High Stakes
 
 This project implements an advanced motion control system for the **VEX V5** platform, with a core focus on **distance-sensor-assisted localization**, designed for the **VEX High Stakes** competition season. It is built on **PROS** and **LemLib**.
